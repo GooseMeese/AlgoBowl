@@ -11,15 +11,16 @@
 #include <mutex>
 #include <atomic>
 #include <set>
+#include <filesystem> // C++17
 
 using namespace std;
+namespace fs = std::filesystem;
 
 constexpr int MAXN = 100;
 constexpr int COLORS = 8;
 constexpr int DX[4] = {0, 1, 0, -1};
 constexpr int DY[4] = {1, 0, -1, 0};
-constexpr int BEAM_WIDTH = 200;
-constexpr int SIMULATIONS = 30;
+constexpr int BEAM_WIDTH = 75;
 
 using Board = vector<vector<int>>;
 
@@ -84,9 +85,8 @@ void apply_gravity(Board& b) {
     int write = 0;
     for (int col = 0; col < W; ++col) {
         bool has_tile = false;
-        for (int row = 0; row < H; ++row) {
+        for (int row = 0; row < H; ++row)
             if (b[row][col] > 0) has_tile = true;
-        }
         if (has_tile) {
             if (col != write) {
                 for (int row = 0; row < H; ++row)
@@ -104,7 +104,6 @@ vector<State> generate_moves(const State& s) {
     int H = s.board.size(), W = s.board[0].size();
     Board mark = s.board;
     vector<State> next_states;
-    set<pair<int,int>> visited;
     for (int i = 0; i < H; ++i) {
         for (int j = 0; j < W; ++j) {
             if (mark[i][j] >= 1) {
@@ -117,6 +116,7 @@ vector<State> generate_moves(const State& s) {
                     apply_gravity(new_board);
                     State ns = {new_board, s.score + score(count), s.moves};
                     ns.moves.push_back({color, count, i + 1, j + 1});
+                    ns.eval = ns.score; // evaluate purely by score
                     next_states.push_back(ns);
                 }
             }
@@ -125,55 +125,16 @@ vector<State> generate_moves(const State& s) {
     return next_states;
 }
 
-int monte_carlo(const State& s, mt19937& rng) {
-    State curr = s;
-    while (true) {
-        auto moves = generate_moves(curr);
-        if (moves.empty()) break;
-        uniform_int_distribution<int> dist(0, moves.size() - 1);
-        curr = moves[dist(rng)];
-    }
-    return curr.score;
-}
-
-int main(int argc, char* argv[]) {
-    ios::sync_with_stdio(false);
-    cin.tie(nullptr);
-
-    if (argc < 2) {
-        cerr << "Usage: " << argv[0] << " <input_file>\n";
-        return 1;
-    }
-
-    ifstream fin(argv[1]);
-    if (!fin) {
-        cerr << "Error opening input file." << endl;
-        return 1;
-    }
-
-    int H, W;
-    fin >> H >> W;
-    Board b(H, vector<int>(W));
-    for (int i = H - 1; i >= 0; --i) {
-        string line; fin >> line;
-        for (int j = 0; j < W; ++j)
-            b[i][j] = line[j] - '0';
-    }
-
-    auto start_time = chrono::steady_clock::now();
-    vector<State> beam = {{b, 0, {}}};
+State run_solver(Board& b, const string& filename) {
+    vector<State> beam = {{b, 0, {}, 0}};
     State best = beam[0];
-    mt19937 rng(chrono::steady_clock::now().time_since_epoch().count());
-
+    int iteration = 0;
     while (!beam.empty()) {
+        iteration++;
         vector<State> candidates;
         for (auto& s : beam) {
             auto next = generate_moves(s);
             for (auto& ns : next) {
-                int total = 0;
-                for (int i = 0; i < SIMULATIONS; ++i)
-                    total += monte_carlo(ns, rng);
-                ns.eval = total / (double)SIMULATIONS;
                 if (ns.score > best.score) best = ns;
                 candidates.push_back(ns);
             }
@@ -181,16 +142,58 @@ int main(int argc, char* argv[]) {
         sort(candidates.begin(), candidates.end());
         if (candidates.size() > BEAM_WIDTH) candidates.resize(BEAM_WIDTH);
         beam = move(candidates);
-        if (chrono::duration_cast<chrono::seconds>(chrono::steady_clock::now() - start_time).count() > 180) break;
+
+        // Status print
+        cout << "File: " << filename << " | Iteration: " << iteration
+             << " | Current best score: " << best.score << endl;
     }
 
-    ofstream fout("output.txt");
-    fout << best.score << '\n';
-    fout << best.moves.size() << '\n';
-    for (auto& m : best.moves) {
-        fout << m.color << ' ' << m.count << ' ' << m.row << ' ' << m.col << '\n';
+    return best;
+}
+
+int main(int argc, char* argv[]) {
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
+
+    if (argc < 2) {
+        cerr << "Usage: " << argv[0] << " <input_folder>\n";
+        return 1;
     }
-    fout.close();
+
+    fs::path folder = argv[1];
+    if (!fs::exists(folder) || !fs::is_directory(folder)) {
+        cerr << "Error: folder does not exist.\n";
+        return 1;
+    }
+
+    for (auto& p : fs::directory_iterator(folder)) {
+        if (!p.is_regular_file()) continue;
+        string input_file = p.path().string();
+        cout << "Processing " << input_file << endl;
+
+        ifstream fin(input_file);
+        if (!fin) continue;
+
+        int H, W;
+        fin >> H >> W;
+        Board b(H, vector<int>(W));
+        for (int i = H - 1; i >= 0; --i) {
+            string line; fin >> line;
+            for (int j = 0; j < W; ++j)
+                b[i][j] = line[j] - '0';
+        }
+        fin.close();
+
+        State best = run_solver(b, p.path().filename().string());
+
+        fs::path out_file = p.path().stem().string() + "_out.txt";
+        ofstream fout(out_file);
+        fout << best.score << '\n';
+        fout << best.moves.size() << '\n';
+        for (auto& m : best.moves)
+            fout << m.color << ' ' << m.count << ' ' << m.row << ' ' << m.col << '\n';
+        fout.close();
+    }
 
     return 0;
 }
