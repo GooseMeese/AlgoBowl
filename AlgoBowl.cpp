@@ -20,7 +20,7 @@ constexpr int MAXN = 100;
 constexpr int COLORS = 8;
 constexpr int DX[4] = {0, 1, 0, -1};
 constexpr int DY[4] = {1, 0, -1, 0};
-constexpr int BEAM_WIDTH = 75;
+constexpr int BEAM_WIDTH = 50;
 
 using Board = vector<vector<int>>;
 
